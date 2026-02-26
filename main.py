@@ -37,12 +37,28 @@ from forwarder import start_forwarder
 
 def run_bot_in_thread():
     """
-    Runs the admin bot in a separate thread
-    because python-telegram-bot uses its own event loop.
+    Runs the admin bot in a separate thread.
+    Uses manual initialization to avoid Linux signal handler issues.
     """
-    bot_app = build_bot_app()
-    logger.info("Admin Bot starting...")
-    bot_app.run_polling(drop_pending_updates=True)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def _run_bot():
+        bot_app = build_bot_app()
+        async with bot_app:
+            await bot_app.updater.start_polling(drop_pending_updates=True)
+            await bot_app.start()
+            logger.info("Admin Bot started successfully")
+            # Keep running until thread is killed
+            while True:
+                await asyncio.sleep(3600)
+
+    try:
+        loop.run_until_complete(_run_bot())
+    except Exception as e:
+        logger.error(f"Bot thread error: {e}")
+    finally:
+        loop.close()
 
 
 async def main():
