@@ -22,3 +22,8 @@ ADMIN_ID = 6009176071  # Example: 123456789
 
 # Channel list refresh interval (seconds)
 CHANNEL_REFRESH_INTERVAL = 30
+
+# Custom footer — replaces source channel footer on every forwarded message
+CUSTOM_FOOTER = """🔔 虛擬信用卡,電話卡：@Gohupadvertising
+☮️ 放鬆燃料：@greenliving420
+☎️投稿報料 ：@realcambo420"""
