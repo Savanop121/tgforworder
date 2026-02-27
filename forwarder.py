@@ -195,14 +195,37 @@ def auto_join_channel_threadsafe(channel_input):
 # ──────────────────────────────────────────────
 
 def _get_filename(media):
-    """Extracts filename from media for proper file type detection."""
+    """Extracts filename from media. Provides proper extension for video/photo/audio."""
     if hasattr(media, 'document') and media.document:
+        # Check for explicit filename first
         for attr in media.document.attributes:
-            if hasattr(attr, 'file_name'):
+            if hasattr(attr, 'file_name') and attr.file_name:
                 return attr.file_name
+        # Determine extension from mime_type
+        mime = getattr(media.document, 'mime_type', '') or ''
+        if 'video' in mime:
+            return 'video.mp4'
+        elif 'gif' in mime or 'image/gif' in mime:
+            return 'animation.gif'
+        elif 'audio' in mime:
+            return 'audio.mp3'
+        elif 'image' in mime:
+            return 'photo.jpg'
+        elif 'sticker' in mime or 'webp' in mime:
+            return 'sticker.webp'
+        return 'document'
     if hasattr(media, 'photo'):
-        return "photo.jpg"
-    return "file"
+        return 'photo.jpg'
+    return 'file'
+
+
+def _is_video(media) -> bool:
+    """Check if media is a video type."""
+    if hasattr(media, 'document') and media.document:
+        mime = getattr(media.document, 'mime_type', '') or ''
+        if 'video' in mime:
+            return True
+    return False
 
 
 # ──────────────────────────────────────────────
@@ -242,11 +265,14 @@ async def copy_forward_message(message, destination):
             media_bytes.name = _get_filename(message.media)
 
             # Re-upload with modified caption
+            is_vid = _is_video(message.media)
             await client.send_file(
                 destination,
                 file=media_bytes,
                 caption=processed_text,
-                has_spoiler=spoiler
+                has_spoiler=spoiler,
+                supports_streaming=is_vid,
+                force_document=False
             )
         elif processed_text:
             await client.send_message(
