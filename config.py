@@ -16,9 +16,8 @@ DB_NAME = "tg_forwarder"
 # Session file name (Telethon session)
 SESSION_NAME = "forwarder_session"
 
-# Admin Telegram user ID — only this user can use bot commands
-# Run the script first, send /myid in bot, then put your ID here
-ADMIN_ID = 6009176071  # Example: 123456789
+# Admin Telegram user IDs — these users can use bot commands
+ADMIN_IDS = [6009176071, 7780348576]
 
 # Channel list refresh interval (seconds)
 CHANNEL_REFRESH_INTERVAL = 30

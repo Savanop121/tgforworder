@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 #  (gambling, casino, betting — not normal posts)
 # ══════════════════════════════════════════════
 
-# High-confidence gambling/casino keywords
+# High-confidence gambling/casino/platform keywords
 AD_KEYWORDS = [
     # Gambling / Casino — very specific
     "彩票入口", "注册就送", "注册网址", "高赔率", "高返水",
@@ -25,24 +25,72 @@ AD_KEYWORDS = [
     "官方客服", "官方飞投", "彩票客服", "福利频道",
     "首存", "笔笔送", "彩金", "特码",
     "NO钱包", "WG联名", "验资", "担保域名",
+    # Platform ads (7T, N9 style)
+    "注册登入", "极速出款", "安全稳定", "顶级平台",
+    "千万担保", "百亿护航", "重金缔造", "钱包官方",
+    "惊喜奇遇", "六大版块", "应有尽有",
+    "新春纵享", "好运不掉线",
+    # Deposit/withdraw
+    "充值笔笔送", "夜间充值", "累计存款", "存款赠送",
+    "电子狂欢", "赠送", "返水",
+    # Service/registration
+    "注册入口", "彩票飞投", "客服",
+    "飞投", "担保",
+    # Domain patterns (specific casino brands)
+    "N9.COM", "7T.COM", "N9国际", "7T国际",
 ]
 
 # Need at least this many keyword matches to block
 AD_THRESHOLD = 3
 
+# Known ad domain patterns
+AD_DOMAINS = [
+    r'n9\.com', r'7t\.com', r'n9cp', r'566676\.vip',
+    r'\.vip/', r'\.bet/', r'\.casino/',
+]
+
+
+def _emoji_density(text: str) -> float:
+    """What fraction of the text is emoji characters."""
+    if not text:
+        return 0.0
+    emoji_re = re.compile(
+        "[\U0001F300-\U0001F9FF"
+        "\U00002600-\U000027BF"
+        "\U0001FA00-\U0001FAFF"
+        "\u200d\u2640-\u2642"
+        "\u2300-\u23FF\uFE0F]+", re.UNICODE
+    )
+    emoji_chars = sum(len(m) for m in emoji_re.findall(text))
+    return emoji_chars / max(len(text), 1)
+
 
 def is_ad_or_spam(text: str) -> bool:
     """
-    Returns True ONLY for pure gambling/casino advertisement posts.
-    Normal posts with a few promotional words will NOT be blocked.
+    Returns True ONLY for pure gambling/casino/platform advertisement posts.
+    Uses keyword matching + emoji density + domain detection.
     """
     if not text:
         return False
 
-    hits = sum(1 for kw in AD_KEYWORDS if kw in text)
+    text_lower = text.lower()
+
+    # Keyword match count
+    hits = sum(1 for kw in AD_KEYWORDS if kw.lower() in text_lower)
 
     if hits >= AD_THRESHOLD:
-        logger.info(f"[FILTER] Ad blocked ({hits} gambling keywords found)")
+        logger.info(f"[FILTER] Ad blocked ({hits} keywords matched)")
+        return True
+
+    # Ad domain detection (even 1 domain + 1 keyword = ad)
+    domain_hit = any(re.search(p, text_lower) for p in AD_DOMAINS)
+    if domain_hit and hits >= 1:
+        logger.info(f"[FILTER] Ad blocked (ad domain + {hits} keywords)")
+        return True
+
+    # High emoji density + at least 1 keyword = likely ad
+    if _emoji_density(text) > 0.10 and hits >= 2:
+        logger.info(f"[FILTER] Ad blocked (emoji spam + {hits} keywords)")
         return True
 
     return False

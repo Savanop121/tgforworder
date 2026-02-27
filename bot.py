@@ -11,7 +11,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
-from config import BOT_TOKEN, ADMIN_ID
+from config import BOT_TOKEN, ADMIN_IDS
 import db
 from forwarder import auto_join_channel_threadsafe
 
@@ -31,10 +31,10 @@ WAITING_DESTINATION = 2
 # ──────────────────────────────────────────────
 
 def is_admin(user_id: int) -> bool:
-    """Check if user is admin. If ADMIN_ID is not set, allow everyone."""
-    if ADMIN_ID is None:
+    """Check if user is admin. If ADMIN_IDS is empty, allow everyone."""
+    if not ADMIN_IDS:
         return True
-    return user_id == ADMIN_ID
+    return user_id in ADMIN_IDS
 
 
 # ──────────────────────────────────────────────
