@@ -1,7 +1,7 @@
 # ============================================
 #  Message Filter Engine
 #  - Ad/Spam detection (gambling only)
-#  - Footer replacement (links + @usernames only)
+#  - Footer replacement (links + @usernames)
 #  - Welcome message skip
 # ============================================
 
@@ -76,33 +76,42 @@ def is_welcome_message(text: str) -> bool:
 
 # ══════════════════════════════════════════════
 #  3. FOOTER REPLACEMENT
-#  Conservative: only removes bottom lines that
-#  contain t.me links or @username mentions
+#  Removes bottom lines with links, @usernames,
+#  bare domains, and text sandwiched between them
 # ══════════════════════════════════════════════
 
-def _is_footer_line(line: str) -> bool:
+def _is_link_line(line: str) -> bool:
     """
-    A line is a footer line ONLY if it contains:
-    - A t.me link (t.me/xxx)
-    - An @username mention (@xxxx with 4+ chars)
-    - A plain URL (https://...)
+    A line is a link/footer line if it contains:
+    - A t.me link (t.me/xxx) — with or without https:// or inside ()
+    - An @username mention (not preceded by alphanumeric = not email)
+    - A full URL (https:// or http://)
+    - A bare domain (xxx.com, xxx.vip, xxx.top, etc.)
+    - A ---- separator line (markdown HR)
     """
     stripped = line.strip()
 
-    # Empty line — decided by context (adjacent to other footer lines)
     if not stripped:
         return False
 
-    # t.me link (with or without https://)
+    # ---- separator (markdown HR / content-footer boundary)
+    if re.match(r'^-{3,}\s*$', stripped):
+        return True
+
+    # t.me link (with or without https://, with or without parentheses)
     if re.search(r't\.me/\S+', stripped):
         return True
 
-    # @username mention (at least 4 chars after @, not preceded by alphanumeric = not email)
+    # @username mention (at least 4 chars, not email)
     if re.search(r'(?<![a-zA-Z0-9])@\w{4,}', stripped):
         return True
 
-    # Plain URL (https:// or http://)
+    # Full URL
     if re.search(r'https?://\S+', stripped):
+        return True
+
+    # Bare domain (xxx.com, xxx.vip, xxx.top, xxx.net, xxx.org, etc.)
+    if re.search(r'\b\w+\.(com|vip|top|net|org|info|cc|co|io|me|xyz|bet|casino)\b', stripped, re.IGNORECASE):
         return True
 
     return False
@@ -110,10 +119,10 @@ def _is_footer_line(line: str) -> bool:
 
 def replace_footer(text: str, custom_footer: str) -> str:
     """
-    Scans from bottom of message upward.
-    Removes ONLY lines that contain t.me links, @usernames, or URLs.
-    Lines without links (even promo text) are kept as-is.
-    Empty lines between removed footer lines are also cleaned up.
+    Two-pass footer detection:
+    Pass 1: Mark all lines with links/@usernames/domains
+    Pass 2: From bottom, find contiguous footer block.
+            Text lines sandwiched between link lines are also footer.
     """
     if not text:
         return custom_footer.strip()
@@ -121,27 +130,66 @@ def replace_footer(text: str, custom_footer: str) -> str:
     lines = text.split('\n')
     total = len(lines)
 
-    # Scan from bottom — remove lines with links/@usernames
-    footer_start = total
+    # Pass 1: Mark all link lines
+    is_link = [_is_link_line(line) for line in lines]
 
+    # Find the last link line
+    last_link = -1
     for i in range(total - 1, -1, -1):
-        stripped = lines[i].strip()
+        if is_link[i]:
+            last_link = i
+            break
 
-        if not stripped:
-            # Empty line — keep scanning (might be between footer lines)
-            continue
-        elif _is_footer_line(lines[i]):
-            # Has link or @username — this is footer
-            footer_start = i
+    # No links found — just append footer
+    if last_link == -1:
+        return f"{text.rstrip()}\n\n{custom_footer.strip()}"
+
+    # Pass 2: From remaining lines (bottom→up), build footer block.
+    # A non-link line is part of footer IF there's a link line within 2 lines below it
+    # AND a link line within 2 lines above it (sandwiched).
+    # We expand the footer zone from bottom upward.
+    footer_zone = [False] * total
+
+    # Start: mark all link lines in the bottom region as footer
+    # First, find the contiguous footer block from the bottom
+    for i in range(total - 1, -1, -1):
+        if is_link[i]:
+            footer_zone[i] = True
+        elif not lines[i].strip():
+            # Empty line — mark as footer if adjacent link lines exist below
+            has_link_below = any(footer_zone[j] for j in range(i + 1, min(i + 4, total)))
+            if has_link_below:
+                footer_zone[i] = True
         else:
-            # No link or @username — stop, this is content
+            # Non-link, non-empty line
+            # Check if sandwiched: link line exists ABOVE and BELOW within range
+            has_link_below = any(footer_zone[j] for j in range(i + 1, min(i + 3, total)))
+            has_link_above = any(is_link[j] for j in range(max(0, i - 2), i))
+
+            if has_link_below and has_link_above:
+                # Sandwiched between link lines — part of footer
+                footer_zone[i] = True
+            elif has_link_below and not has_link_above:
+                # Above the footer block — might be the first non-link line
+                # Only include if short (promo text like 关注柬埔寨热点：)
+                # Stop if it looks like real content
+                break
+            else:
+                # No links below or too far — real content
+                break
+
+    # Find the topmost footer line
+    footer_start = total
+    for i in range(total):
+        if footer_zone[i]:
+            footer_start = i
             break
 
     # No footer found — just append
     if footer_start >= total:
         return f"{text.rstrip()}\n\n{custom_footer.strip()}"
 
-    # Also remove empty lines between content and footer
+    # Remove empty lines between content and footer
     while footer_start > 0 and not lines[footer_start - 1].strip():
         footer_start -= 1
 
