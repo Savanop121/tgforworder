@@ -39,12 +39,25 @@ _main_loop: asyncio.AbstractEventLoop | None = None
 async def retry_operation(operation_name, coro, max_retries=MAX_RETRIES):
     """
     Retries an async operation up to max_retries times.
-    Skips retry for permanent errors.
+    Skips retry for permanent errors and non-error results (skipped/copied).
     """
     last_error = None
     for attempt in range(1, max_retries + 1):
         try:
-            return await coro()
+            result = await coro()
+            # Don't retry if operation succeeded or was intentionally skipped
+            if result in ("skipped", "copied", "forwarded"):
+                return result
+            # "failed" result — retry
+            if result == "failed" and attempt < max_retries:
+                wait = RETRY_DELAY * attempt
+                logger.warning(
+                    f"[RETRY] {operation_name} attempt {attempt}/{max_retries} returned 'failed'. "
+                    f"Retrying in {wait}s..."
+                )
+                await asyncio.sleep(wait)
+                continue
+            return result
         except (errors.ChatForwardsRestrictedError,
                 errors.ChatWriteForbiddenError,
                 errors.ChannelPrivateError,
@@ -205,7 +218,8 @@ async def copy_forward_message(message, destination):
     media_bytes = None
     try:
         # Process text — ad/welcome filter + footer replace
-        original_text = message.text or ""
+        # Use raw_text to get original text without markdown parsing issues
+        original_text = message.text or message.raw_text or ""
         processed_text = process_message_text(original_text, CUSTOM_FOOTER)
 
         # None means skip (ad or welcome message)
@@ -280,11 +294,12 @@ async def copy_forward_album(messages, destination):
                 media_bytes.name = _get_filename(msg.media)
                 files.append(media_bytes)
 
-                # Footer replace on caption
+                # Footer replace on caption (None = ad, use empty string)
                 cap = msg.text or ""
                 if cap:
                     processed = process_message_text(cap, CUSTOM_FOOTER)
-                    captions.append(processed if processed else "")
+                    # process_message_text returns None for ads — use empty string
+                    captions.append(processed if processed is not None else "")
                 else:
                     captions.append("")
 
@@ -367,14 +382,14 @@ async def on_new_message(event):
 
         result = await smart_forward(event.message, _destination_id)
 
+        # Get chat info once (avoid duplicate API call)
+        chat = await event.get_chat()
+        chat_title = getattr(chat, 'title', None) or getattr(chat, 'username', None) or str(chat_id)
+
         if result == "skipped":
-            chat = await event.get_chat()
-            chat_title = getattr(chat, 'title', None) or str(chat_id)
             logger.info(f"[SKIP] Ad/welcome message from [{chat_title}]")
             return
 
-        chat = await event.get_chat()
-        chat_title = getattr(chat, 'title', None) or getattr(chat, 'username', None) or str(chat_id)
         msg_type = "media" if event.message.media else "text"
         logger.info(f"[FWD] {result} {msg_type} from [{chat_title}] to destination")
 
@@ -400,14 +415,14 @@ async def on_album(event):
 
         result = await smart_forward_album(event.messages, _destination_id)
 
+        # Get chat info once
+        chat = await event.get_chat()
+        chat_title = getattr(chat, 'title', None) or str(chat_id)
+
         if result == "skipped":
-            chat = await event.get_chat()
-            chat_title = getattr(chat, 'title', None) or str(chat_id)
             logger.info(f"[SKIP] Ad/welcome album from [{chat_title}]")
             return
 
-        chat = await event.get_chat()
-        chat_title = getattr(chat, 'title', None) or str(chat_id)
         logger.info(f"[FWD] {result} album ({len(event.messages)} items) from [{chat_title}]")
 
     except Exception as e:

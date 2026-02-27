@@ -342,6 +342,8 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Channel posts have no effective_user — skip them
     if not update.effective_user:
         return
+    if not update.message or not update.message.text:
+        return
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Unauthorized!")
         return
@@ -365,7 +367,7 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _process_add_channel(update: Update, text: str):
-    """Add channel — ID, username, ya invite link se. Auto-join bhi karta hai."""
+    """Adds a channel via ID, username, or invite link. Auto-joins the channel."""
     try:
         input_text = text.strip()
 

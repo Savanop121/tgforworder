@@ -97,8 +97,8 @@ def _is_footer_line(line: str) -> bool:
     if re.search(r't\.me/\S+', stripped):
         return True
 
-    # @username mention (at least 4 chars after @)
-    if re.search(r'@\w{4,}', stripped):
+    # @username mention (at least 4 chars after @, not preceded by alphanumeric = not email)
+    if re.search(r'(?<![a-zA-Z0-9])@\w{4,}', stripped):
         return True
 
     # Plain URL (https:// or http://)
