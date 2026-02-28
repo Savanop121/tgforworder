@@ -235,17 +235,16 @@ def _is_video(media) -> bool:
 
 async def copy_forward_message(message, destination):
     """
-    Downloads media to RAM, modifies caption (footer replace),
-    then re-uploads as fresh content. Preserves spoiler flags.
+    Downloads media, modifies caption (footer replace),
+    then re-uploads as fresh content.
+    Uses temp file for videos (large), BytesIO for photos (small).
     """
+    temp_path = None
     media_bytes = None
     try:
-        # Process text — ad/welcome filter + footer replace
-        # Use raw_text to get original text without markdown parsing issues
         original_text = message.text or message.raw_text or ""
         processed_text = process_message_text(original_text, CUSTOM_FOOTER)
 
-        # None means skip (ad or welcome message)
         if processed_text is None:
             return "skipped"
 
@@ -253,40 +252,72 @@ async def copy_forward_message(message, destination):
             spoiler = getattr(message.media, 'spoiler', False) or \
                       getattr(message.media, 'has_spoiler', False)
 
-            # Download media
-            media_bytes = BytesIO()
-            await client.download_media(message, file=media_bytes)
-
-            if media_bytes.tell() == 0:
-                logger.warning("[WARN] Downloaded 0 bytes, skipping media")
-                return "failed"
-
-            media_bytes.seek(0)
-            media_bytes.name = _get_filename(message.media)
-
-            # Re-upload with modified caption
             is_vid = _is_video(message.media)
-            await client.send_file(
-                destination,
-                file=media_bytes,
-                caption=processed_text,
-                has_spoiler=spoiler,
-                supports_streaming=is_vid,
-                force_document=False
-            )
+            filename = _get_filename(message.media)
+
+            if is_vid:
+                # Videos → temp file (can be large, BytesIO may fail)
+                import tempfile
+                import os
+                temp_dir = tempfile.gettempdir()
+                temp_path = os.path.join(temp_dir, f"tg_fwd_{id(message)}_{filename}")
+                await client.download_media(message, file=temp_path)
+
+                if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+                    logger.warning("[WARN] Video download empty/failed")
+                    return "failed"
+
+                file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+                logger.info(f"[DL] Video downloaded: {file_size_mb:.1f}MB")
+
+                await client.send_file(
+                    destination,
+                    file=temp_path,
+                    caption=processed_text,
+                    has_spoiler=spoiler,
+                    supports_streaming=True,
+                    force_document=False
+                )
+            else:
+                # Photos/docs → BytesIO (faster, smaller)
+                media_bytes = BytesIO()
+                await client.download_media(message, file=media_bytes)
+
+                if media_bytes.tell() == 0:
+                    logger.warning("[WARN] Downloaded 0 bytes, skipping")
+                    return "failed"
+
+                media_bytes.seek(0)
+                media_bytes.name = filename
+
+                await client.send_file(
+                    destination,
+                    file=media_bytes,
+                    caption=processed_text,
+                    has_spoiler=spoiler,
+                    force_document=False
+                )
+
         elif processed_text:
-            await client.send_message(
-                destination,
-                processed_text
-            )
+            await client.send_message(destination, processed_text)
+
         return "copied"
     except Exception as e:
         logger.error(f"[ERROR] Copy-forward error: {e}")
         return "failed"
     finally:
+        # Cleanup RAM
         if media_bytes:
             media_bytes.close()
             del media_bytes
+        # Cleanup temp file
+        if temp_path:
+            try:
+                import os
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except Exception:
+                pass
 
 
 async def copy_forward_album(messages, destination):
