@@ -24,6 +24,5 @@ ADMIN_IDS = [6009176071, 7780348576]
 CHANNEL_REFRESH_INTERVAL = 30
 
 # Custom footer — replaces source channel footer on every forwarded message
-CUSTOM_FOOTER = """🔔 虛擬信用卡,電話卡：@Gohupadvertising
-☮️ 放鬆燃料：@greenliving420
-☎️投稿報料 ：@realcambo420"""
+CUSTOM_FOOTER = """🌴 柬埔寨 420：@greenliving42
+🍂雪茄探索 : @HiddenLeafKH"""
