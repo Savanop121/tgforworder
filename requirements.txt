@@ -3,3 +3,5 @@ python-telegram-bot
 motor
 pymongo[srv]
 dnspython
+pytesseract
+Pillow

@@ -2,16 +2,24 @@
 #  Forwarder — Telethon Userbot Message Forwarding
 #  Features: Forward, Copy-forward (restricted),
 #            Spoiler support, Album grouping,
-#            Footer replace, Ad filter, Retry logic
+#            Footer replace, Ad filter, Retry logic,
+#            OCR-based image ad detection,
+#            Duplicate post/image detection
 # ============================================
 
 import asyncio
 import logging
 from io import BytesIO
 from telethon import TelegramClient, events, errors
-from config import API_ID, API_HASH, SESSION_NAME, CHANNEL_REFRESH_INTERVAL, CUSTOM_FOOTER
+from config import API_ID, API_HASH, SESSION_NAME, CHANNEL_REFRESH_INTERVAL, CUSTOM_FOOTER, OCR_AD_DETECTION
 import db
 from message_filter import process_message_text, is_ad_or_spam
+from ocr_ad_detector import is_image_ad_from_bytesio
+from dedup import (
+    is_duplicate_text, is_duplicate_image_bytesio,
+    mark_text_forwarded, mark_image_forwarded_bytesio,
+    initialize_dedup
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -248,6 +256,11 @@ async def copy_forward_message(message, destination):
         if processed_text is None:
             return "skipped"
 
+        # Duplicate text check (skip if same text already forwarded)
+        if original_text and not message.media:
+            if await is_duplicate_text(original_text):
+                return "skipped"
+
         if message.media:
             spoiler = getattr(message.media, 'spoiler', False) or \
                       getattr(message.media, 'has_spoiler', False)
@@ -270,6 +283,31 @@ async def copy_forward_message(message, destination):
                 file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
                 logger.info(f"[DL] Video downloaded: {file_size_mb:.1f}MB")
 
+                # OCR ad check on video — read temp file bytes
+                if OCR_AD_DETECTION:
+                    try:
+                        with open(temp_path, 'rb') as vf:
+                            vid_bytes = vf.read()
+                        is_ad, reason = is_image_ad_from_bytesio(BytesIO(vid_bytes))
+                        del vid_bytes
+                        if is_ad:
+                            logger.info(f"[OCR-FILTER] Video thumbnail ad: {reason}")
+                            return "skipped"
+                    except Exception as ocr_err:
+                        logger.debug(f"[OCR] Video OCR skipped (not an image): {ocr_err}")
+
+                # Duplicate video check
+                try:
+                    with open(temp_path, 'rb') as vf_dup:
+                        vid_bytesio = BytesIO(vf_dup.read())
+                    if await is_duplicate_image_bytesio(vid_bytesio):
+                        logger.info("[DEDUP] Duplicate video detected, skipping")
+                        vid_bytesio.close()
+                        return "skipped"
+                    vid_bytesio.close()
+                except Exception as dup_err:
+                    logger.debug(f"[DEDUP] Video dedup check failed: {dup_err}")
+
                 await client.send_file(
                     destination,
                     file=temp_path,
@@ -278,6 +316,15 @@ async def copy_forward_message(message, destination):
                     supports_streaming=True,
                     force_document=False
                 )
+
+                # Mark video as forwarded
+                try:
+                    with open(temp_path, 'rb') as vf_mark:
+                        mark_bytesio = BytesIO(vf_mark.read())
+                    await mark_image_forwarded_bytesio(mark_bytesio)
+                    mark_bytesio.close()
+                except Exception:
+                    pass
             else:
                 # Photos/docs → BytesIO (faster, smaller)
                 media_bytes = BytesIO()
@@ -290,6 +337,21 @@ async def copy_forward_message(message, destination):
                 media_bytes.seek(0)
                 media_bytes.name = filename
 
+                # OCR ad check on photo/document
+                if OCR_AD_DETECTION:
+                    try:
+                        is_ad, reason = is_image_ad_from_bytesio(media_bytes)
+                        if is_ad:
+                            logger.info(f"[OCR-FILTER] Image ad detected: {reason}")
+                            return "skipped"
+                    except Exception as ocr_err:
+                        logger.debug(f"[OCR] Image OCR check failed: {ocr_err}")
+
+                # Duplicate image check
+                if await is_duplicate_image_bytesio(media_bytes):
+                    logger.info("[DEDUP] Duplicate image detected, skipping")
+                    return "skipped"
+
                 await client.send_file(
                     destination,
                     file=media_bytes,
@@ -298,8 +360,16 @@ async def copy_forward_message(message, destination):
                     force_document=False
                 )
 
+                # Mark image as forwarded
+                await mark_image_forwarded_bytesio(media_bytes)
+
         elif processed_text:
+            # Duplicate text check for text-only messages
+            if await is_duplicate_text(original_text):
+                return "skipped"
             await client.send_message(destination, processed_text)
+            # Mark text as forwarded
+            await mark_text_forwarded(original_text)
 
         return "copied"
     except Exception as e:
@@ -338,6 +408,12 @@ async def copy_forward_album(messages, destination):
             logger.info("[FILTER] Album ad detected, skipping")
             return "skipped"
 
+        # Duplicate text check for album captions
+        if first_text and await is_duplicate_text(first_text):
+            logger.info("[DEDUP] Duplicate album text detected, skipping")
+            return "skipped"
+
+        ocr_checked_first = False
         for msg in messages:
             if msg.media:
                 media_bytes = BytesIO()
@@ -349,6 +425,19 @@ async def copy_forward_album(messages, destination):
 
                 media_bytes.seek(0)
                 media_bytes.name = _get_filename(msg.media)
+
+                # OCR ad check on first image of album
+                if OCR_AD_DETECTION and not ocr_checked_first:
+                    ocr_checked_first = True
+                    try:
+                        is_ad_img, reason = is_image_ad_from_bytesio(media_bytes)
+                        if is_ad_img:
+                            logger.info(f"[OCR-FILTER] Album image ad: {reason}")
+                            media_bytes.close()
+                            return "skipped"
+                    except Exception as ocr_err:
+                        logger.debug(f"[OCR] Album OCR check failed: {ocr_err}")
+
                 files.append(media_bytes)
 
                 # Footer replace on caption (None = ad, use empty string)
@@ -370,11 +459,21 @@ async def copy_forward_album(messages, destination):
                 else:
                     captions[last_idx] = CUSTOM_FOOTER.strip()
 
+            # Duplicate image check on first file of album
+            if files:
+                if await is_duplicate_image_bytesio(files[0]):
+                    logger.info("[DEDUP] Duplicate album image detected, skipping")
+                    return "skipped"
+
             await client.send_file(
                 destination,
                 file=files,
                 caption=captions
             )
+
+            # Mark first image of album as forwarded
+            if files:
+                await mark_image_forwarded_bytesio(files[0])
         return "copied"
     except Exception as e:
         logger.error(f"[ERROR] Copy-forward album error: {e}")
@@ -519,6 +618,9 @@ async def start_forwarder():
 
     logger.info(f"Monitoring {len(_monitored_channels)} channels")
     logger.info(f"Destination: {_destination_id}")
+
+    # Initialize duplicate detection (load hashes from MongoDB)
+    await initialize_dedup()
 
     asyncio.create_task(refresh_channel_list())
     logger.info("Listening for new messages...")

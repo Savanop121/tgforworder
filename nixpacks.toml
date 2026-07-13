@@ -1,0 +1,7 @@
+# ============================================
+#  Nixpacks Config — Railway Deployment
+#  Installs Tesseract OCR + Language Packs
+# ============================================
+
+[phases.setup]
+aptPkgs = ["tesseract-ocr", "tesseract-ocr-chi-sim", "tesseract-ocr-chi-tra", "tesseract-ocr-eng"]

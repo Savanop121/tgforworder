@@ -154,6 +154,18 @@ def is_ad_or_spam(text: str) -> bool:
     return False
 
 
+def is_ad_or_spam_with_score(text: str) -> tuple[bool, int, list[str]]:
+    """
+    Returns (is_ad, score, categories).
+    Used by OCR detector for detailed logging.
+    """
+    if not text:
+        return False, 0, []
+    score, categories = _calculate_ad_score(text)
+    is_ad = score >= AD_SCORE_THRESHOLD
+    return is_ad, score, categories
+
+
 # ══════════════════════════════════════════════
 #  2. WELCOME / SERVICE MESSAGE DETECTION
 # ══════════════════════════════════════════════
