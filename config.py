@@ -7,7 +7,7 @@ API_ID = 31527593
 API_HASH = "dfbc5c90fbcd64a706c2b2ba6419f494"
 
 # Bot token (from @BotFather)
-BOT_TOKEN = "8664203521:AAGNNwo28N6lgqhhVL2ovXZtxxWD-taP4wA"
+BOT_TOKEN = "8664203521:AAE14Xx3oZPxcZU5yX3wUNciLZxqUdWP8Io"
 
 # MongoDB connection
 MONGO_URI = "mongodb+srv://lovetrr:ssgsggsgssg@tgforwirding.cqnncrg.mongodb.net/"
